@@ -24,7 +24,7 @@ print(device)
 
 id_list = np.loadtxt('./catalog/dr17_id.txt',dtype=str)
 test_id = id_list[int(0.8*len(id_list)):]
-NSAid_list = np.loadtxt('./NSAid_list.txt').astype(int)
+NSAid_list = np.loadtxt('./catalog/NSAid_list.txt').astype(int)
 
 class CNN_result():
     N_FIGS = 9
@@ -68,7 +68,7 @@ class CNN_result():
     
     def VT_lize(self, do_scramble = False):
         temp = self.x
-        mask = test_set[self.index:(self.index+1),(N_FIGS-2),:,:]
+        mask = temp[0,(self.N_FIGS-2),:,:]
         #temp[:,:3,:,:] = (temp[:,:3,:,:])*test_set[index:(index+1),4:5,:,:] #overall 
         #temp[:,0,:,:] = (temp[:,0,:,:]+0)*test_set[index:(index+1),(N_FIGS-2),:,:] #g band
         #temp[:,1,:,:] = (temp[:,1,:,:]+0)*test_set[index:(index+1),(N_FIGS-2),:,:] #r band
