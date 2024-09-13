@@ -106,12 +106,12 @@ class CNN_result():
     def scramble(self,temp,keep = 0):
         mask = self.x[:,(self.N_FIGS-2),:,:].to('cpu').bool().numpy().ravel()
         scramble = torch.ones(temp.shape)
-        for idx in range(len(temp[0])):
+        for idx in range(temp.shape[1]):
             map = temp[:,idx,:,:].ravel()
             if not keep:
                 self.scramble_idx = torch.randperm(len(map[mask]))
             map[mask] = map[mask][self.scramble_idx]
-            scramble[:,idx,:,:] = map.reshape(temp.shape)
+            scramble[:,idx,:,:] = map.reshape(temp[:,idx,:,:].shape)
         return scramble
     
     def Gaussian(self, k_size=5, sigma = 2.5):
