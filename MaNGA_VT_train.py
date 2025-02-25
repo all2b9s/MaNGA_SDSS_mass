@@ -12,17 +12,34 @@ import urllib.request
 import optuna
 from optuna.trial import TrialState
 import sys
+import argparse
+# nohup python -u MaNGA_VT_train.py 2 >> ./logs/PCA_iz.out 2>&1 &
 
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
-# nohup python -u MaNGA_VT_train.py 3 >> ./logs/mastar_i_only.out 2>&1 &
+# python -u MaNGA_VT_train.py --study_name PCA_ugi --bands u g i --device 0 
 
-#device=torch.device(1 if torch.cuda.is_available() else 'cpu')
-#device_valid = torch.device('cpu')
-device = torch.device(int(sys.argv[1]) if torch.cuda.is_available() else 'cpu')
+'''
+python -u MaNGA_VT_train.py --study_name PCA_ugr --bands u g r --device 0 
+python -u MaNGA_VT_train.py --study_name PCA_ugi --bands u g i --device 1
+python -u MaNGA_VT_train.py --study_name PCA_ugz --bands u g z --device 2
+python -u MaNGA_VT_train.py --study_name PCA_uri --bands u r i --device 3 
+'''
+
+parser = argparse.ArgumentParser(description='Process study name and bands.')
+
+parser.add_argument('--study_name', type=str, required=True, help='Name of the study')
+parser.add_argument('--bands', nargs='+', required=True, help='List of bands (1 to 5 letters)')
+parser.add_argument('--device', type= int, required=True, help='the index of GPU')
+
+args = parser.parse_args()
+
+study_name = args.study_name
+bands = args.bands
+device = torch.device(int(args.device) if torch.cuda.is_available() else 'cpu')
+
 print(device)
 N_FIGS = 9 
 
-Data = torch.load('./catalog/dr17_mastar.pt',map_location=device)
+Data = torch.load('./catalog/dr17_PCA.pt',map_location=device)
 #Data[:,8,:,:] = Data[:,8,:,:]+np.log10(1/0.25)
 #Data = Data[:,[1,3,4,5],:,:]
 #Data = torch.tensor(Data)
@@ -30,12 +47,12 @@ normed_Data = torch.clone(Data)
 
 train_set = Data[:int(0.7*len(Data)),:,:,:].to(device)
 valid_set = Data[int(0.7*len(Data)):int(0.8*len(Data)),:,:,:].to(device)
-test_set = Data[int(0.8*len(Data)):,:,:,:].to(device)
+test_set = Data[int(0.8*len(Data)):,:,:,:]
 
 
-study_name = 'Mastar_i_only'
+#study_name = 'PCA_iz'
 storage = 'sqlite:///./models/'+study_name+'.db'
-bands = ['i']
+#bands = ['i','z']
 
 def Conv2D(in_channels,out_channels,kernel_size,padding):
     conv = nn.Sequential(
@@ -54,6 +71,7 @@ class CNN_noVT(nn.Module):
         padding = int(kernel_size/2)
         super(CNN_noVT, self).__init__()
         self.mask = list(map(lambda band: self.band_to_index[band], bands))
+        print(self.mask)
         self.redshift = Conv2D(6,6,1,0)
         self.conv_1 =Conv2D(len(bands)+2, mid,kernel_size, padding = padding)
         conv = []
@@ -88,7 +106,7 @@ class CNN_noVT(nn.Module):
 def objective(trial):
     ############################################################################
     num_layers = trial.suggest_int("num_layers", 3, 5)
-    kernel_size = 2*trial.suggest_int("kernels_size/2", 0, 5)+1
+    kernel_size = 2*trial.suggest_int("kernels_size/2", 0, 4)+1
     mid = trial.suggest_int("num_filters", 2**5, 2**7,log=True) 
     lr = trial.suggest_float("lr", 1e-6, 1e-4, log=True)
     weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-4, log=True)
@@ -98,14 +116,14 @@ def objective(trial):
     model = CNN_noVT(bands = bands, mid = mid,kernel_size=kernel_size,n_layers=num_layers).to(device)
     criterion                   = nn.MSELoss()
     optimizer                   = torch.optim.Adam(model.parameters(),lr=lr,weight_decay = weight_decay)
-    num_epochs = 40
-    batch_size =32
+    num_epochs = 30
+    batch_size = 24
     
     dataset = torch.utils.data.TensorDataset(train_set[:,:(N_FIGS-1),:,:], train_set[:,(N_FIGS-1):,:,:])
     train_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
     
     valid_dataset = torch.utils.data.TensorDataset(valid_set[:,:(N_FIGS-1),:,:], valid_set[:,(N_FIGS-1):,:,:])
-    valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=256, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(valid_dataset, batch_size=128, shuffle=True)
     
     min_valid = 1e40
     fout = './models/'+study_name+'_1.out'   
@@ -163,10 +181,10 @@ def main():
     n_trials       = 100  # set to None for infinite
     startup_trials = 40
 ########################################################################################################
-    try:
-        optuna.delete_study(study_name=study_name,storage= storage)
-    except:
-        pass
+    #try:
+    #    optuna.delete_study(study_name=study_name,storage= storage)
+    #except:
+    #    pass
     sampler = optuna.samplers.TPESampler(n_startup_trials=startup_trials)
     study = optuna.create_study(direction="minimize",
                                 study_name=study_name,
