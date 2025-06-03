@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 from tqdm import tqdm as tqdm
 import cv2
 from scipy.ndimage import convolve
@@ -15,7 +14,6 @@ import torch.nn.functional as F
 from astropy.io import fits
 from matplotlib import pyplot as plt
 
-import seaborn as sns
 
 device=torch.device(0 if torch.cuda.is_available() else 'cpu')
 #device = 'cpu'
@@ -40,6 +38,8 @@ class CNN_result():
             self.test_set = data[int(0.8*len(data)):,:,:,:].to(device)
             self.manga_id = test_id[index]
             self.x= (self.test_set[index:(index+1),:,:,:].clone())
+            hdu_bin = fits.open('./MaNGA_train/bin_id/'+str(self.manga_id)+'_bin_id.fits',dtype=np.float32)
+            self.bin_id = torch.tensor(hdu_bin[0].data.astype(np.float32)).reshape([1,1,100,100])
         
     def get_img(self, mode):
         temp = self.x[:,:(self.N_FIGS-1),:,:]
@@ -50,20 +50,23 @@ class CNN_result():
 
         return img[0][0]
     
-    def VT_bined(self, _image):
-        #hdu_bin = fits.open('./MaNGA_train/bin_id/'+str(self.manga_id)+'_bin_id.fits',dtype=np.float32)
-        #bin_id = torch.tensor(hdu_bin[0].data.astype(np.float32)).reshape([1,1,100,100])
-        bin_id = self.bin_id.ravel()
+    def VT_bined(self, _image, mask = None):
+        bin_id = torch.clone(self.bin_id)
         #bin_id = bin_id[scramble_idx]
-        bin_id = bin_id.numpy()
+        bin_id = bin_id.ravel().numpy()
         bin_count = np.unique(bin_id, return_counts = True)[1]
         bin_inverse = np.unique(bin_id, return_inverse = True)[1]
         image_1d = _image.ravel()
-        image_VT = np.zeros([len(bin_id)])
-        for i in range(len(bin_count)):
-            _sum = np.sum(10**image_1d[bin_inverse==i])
+        image_VT = np.zeros([len(bin_id)])-1
+        for i in range(1,len(bin_count)):
+            if mask is not None:
+                mask_1d = mask.ravel()
+                _sum = np.sum(10**(image_1d*mask.ravel())[bin_inverse==i])
+            else:
+                _sum = np.sum(10**image_1d[bin_inverse==i])
             image_VT[bin_inverse==i]=np.log10(_sum/bin_count[i])
         image_VT = image_VT.reshape(_image.shape)
+        #image_VT*=self.x[0,(self.N_FIGS-2),:,:].to('cpu').numpy()
         return image_VT
     
     def VT_lize(self, do_scramble = False):
@@ -102,6 +105,12 @@ class CNN_result():
         gmass_tru = torch.sum(0.16*mass_tru)
 
         return gmass_pred, gmass_tru
+    
+    def get_bands_mask(self, band_indexs):
+        mask = torch.ones([1,1,100,100]).to(self.x.device)
+        for index in band_indexs:
+            mask*=(self.x[0:1,index:(index+1)]>-9)
+        return (mask).bool().to('cpu').numpy()
 
     def scramble(self,temp,keep = 0):
         mask = self.x[:,(self.N_FIGS-2),:,:].to('cpu').bool().numpy().ravel()
