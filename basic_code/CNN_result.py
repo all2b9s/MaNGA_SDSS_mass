@@ -15,9 +15,6 @@ from astropy.io import fits
 from matplotlib import pyplot as plt
 
 
-device=torch.device(0 if torch.cuda.is_available() else 'cpu')
-#device = 'cpu'
-print(device)
 
 
 id_list = np.loadtxt('./catalog/dr17_id.txt',dtype=str)
@@ -26,25 +23,35 @@ NSAid_list = np.loadtxt('./catalog/NSAid_list.txt').astype(int)
 
 class CNN_result():
     N_FIGS = 9
-    def __init__(self,model, index, data ,mode='test'):
+    def __init__(self,model, index, data ,mode='test', do_scramble = False):
         self.model = model
         self.index = index
         self.mode = mode
+        self.device = data.device
         if mode == 'all':
             self.manga_id = id_list[index]
             self.x = data[index:(index+1),:,:,:]
 
         if mode == 'test':
-            self.test_set = data[int(0.8*len(data)):,:,:,:].to(device)
+            self.test_set = data[int(0.8*len(data)):,:,:,:].to(self.device)
             self.manga_id = test_id[index]
-            self.x= (self.test_set[index:(index+1),:,:,:].clone())
+            self.x= (self.test_set[index:(index+1),:,:,:].clone()).to(self.device)
             hdu_bin = fits.open('./MaNGA_train/bin_id/'+str(self.manga_id)+'_bin_id.fits',dtype=np.float32)
             self.bin_id = torch.tensor(hdu_bin[0].data.astype(np.float32)).reshape([1,1,100,100])
         
+        if do_scramble:
+            mask = torch.clone(self.x[0,(self.N_FIGS-2),:,:]).to(torch.bool).to(self.x.device)
+            self.scramble_idx = torch.randperm(len(self.x[0,0][mask]))
+            self.x = self.scramble(self.x)  #scramble the data
+            try:
+                self.bin_id = self.scramble(self.bin_id) #scramble the VT_bin
+            except:
+                pass
+        
     def get_img(self, mode):
-        temp = self.x[:,:(self.N_FIGS-1),:,:]
+        temp = torch.clone(self.x[:,:(self.N_FIGS-1),:,:]).to(self.device)
         if mode == 'pred':
-            img = (self.model(temp)[0]*self.x[:,(self.N_FIGS-2):(self.N_FIGS-1),:,:]).to('cpu').detach().numpy()
+            img = (self.model(temp)[0]*temp[:,(self.N_FIGS-2):(self.N_FIGS-1),:,:]).to('cpu').detach().numpy()
         if mode == 'truth':
             img = self.x[:,(self.N_FIGS-1):,:,:].to('cpu').detach().numpy()
 
@@ -54,23 +61,29 @@ class CNN_result():
         bin_id = torch.clone(self.bin_id)
         #bin_id = bin_id[scramble_idx]
         bin_id = bin_id.ravel().numpy()
-        bin_count = np.unique(bin_id, return_counts = True)[1]
         bin_inverse = np.unique(bin_id, return_inverse = True)[1]
+        bin_count = np.unique(bin_id, return_counts = True)[1]
         image_1d = _image.ravel()
         image_VT = np.zeros([len(bin_id)])-1
+        
         for i in range(1,len(bin_count)):
             if mask is not None:
                 mask_1d = mask.ravel()
-                _sum = np.sum(10**(image_1d*mask.ravel())[bin_inverse==i])
+                _sum = np.sum(10**(image_1d*mask_1d)[bin_inverse==i])
+                bin_count[i]-=(~mask_1d[bin_inverse == i]).sum()
             else:
                 _sum = np.sum(10**image_1d[bin_inverse==i])
-            image_VT[bin_inverse==i]=np.log10(_sum/bin_count[i])
+            
+            try:
+                image_VT[bin_inverse==i]=np.log10(_sum/bin_count[i])
+            except:
+                image_VT = -1
         image_VT = image_VT.reshape(_image.shape)
         #image_VT*=self.x[0,(self.N_FIGS-2),:,:].to('cpu').numpy()
         return image_VT
     
-    def VT_lize(self, do_scramble = False):
-        temp = self.x
+    def VT_lize(self):
+        temp = torch.clone(self.x)
         mask = temp[0,(self.N_FIGS-2),:,:]
         #temp[:,:3,:,:] = (temp[:,:3,:,:])*test_set[index:(index+1),4:5,:,:] #overall 
         #temp[:,0,:,:] = (temp[:,0,:,:]+0)*test_set[index:(index+1),(N_FIGS-2),:,:] #g band
@@ -78,12 +91,6 @@ class CNN_result():
         #temp[:,2,:,:] = (temp[:,2,:,:]+0.5)*test_set[index:(index+1),(N_FIGS-2),:,:] #i band
         temp[:,5,:,:] = (temp[:,5,:,:])
         temp[:,:5,:,:] = temp[:,:5,:,:]*mask-10*(1-mask)
-        
-        hdu_bin = fits.open('./MaNGA_train/bin_id/'+str(self.manga_id)+'_bin_id.fits',dtype=np.float32)
-        self.bin_id = torch.tensor(hdu_bin[0].data.astype(np.float32)).reshape([1,1,100,100])
-        if do_scramble:
-            self.bin_id = self.scramble(self.bin_id) #scramble the VT_bin
-            temp = self.scramble(temp, keep=1)  #scramble the data
         mass_tru = self.get_img('truth')
         self.mass_pred = self.get_img('pred')
         
@@ -91,7 +98,6 @@ class CNN_result():
         mass_tru[mass_tru<-10]=0
         self.mass_tru = self.VT_bined(mass_tru)
         mass_pred_VT = mass_pred_VT.reshape(self.mass_pred.shape)
-        #mass_pred_VT = mass_pred_VT-(-0.1*mass_pred_VT+0.82)
         self.mass_pred_VT = mass_pred_VT*temp[0,(self.N_FIGS-2),:,:].to('cpu').detach().numpy()
         return self.mass_pred_VT, self.mass_tru, self.manga_id
 
@@ -107,18 +113,16 @@ class CNN_result():
         return gmass_pred, gmass_tru
     
     def get_bands_mask(self, band_indexs):
-        mask = torch.ones([1,1,100,100]).to(self.x.device)
+        mask = torch.ones([1,1,100,100]).to(self.device)
         for index in band_indexs:
             mask*=(self.x[0:1,index:(index+1)]>-9)
         return (mask).bool().to('cpu').numpy()
 
-    def scramble(self,temp,keep = 0):
-        mask = self.x[:,(self.N_FIGS-2),:,:].to('cpu').bool().numpy().ravel()
+    def scramble(self,temp):
+        mask = torch.clone(self.x[:,(self.N_FIGS-2),:,:]).to('cpu').bool().numpy().ravel()
         scramble = torch.ones(temp.shape)
         for idx in range(temp.shape[1]):
             map = temp[:,idx,:,:].ravel()
-            if not keep:
-                self.scramble_idx = torch.randperm(len(map[mask]))
             map[mask] = map[mask][self.scramble_idx]
             scramble[:,idx,:,:] = map.reshape(temp[:,idx,:,:].shape)
         return scramble
@@ -163,7 +167,7 @@ def p90_pred(index, model, test_set):
     p90_sam[0,7,:,:] = image[0,:,:,5]
 
     p90_sam = p90_sam.astype(np.float32)
-    p90_tsam = torch.tensor(p90_sam).to(device)
+    p90_tsam = torch.tensor(p90_sam).to(test_set.device)
 
     p90_pixel, p90_total = model(p90_tsam)
     p90_pixel = p90_pixel.to('cpu').detach().numpy()
