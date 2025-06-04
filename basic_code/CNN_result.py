@@ -113,7 +113,7 @@ class CNN_result():
         return gmass_pred, gmass_tru
     
     def get_bands_mask(self, band_indexs):
-        mask = torch.ones([1,1,100,100]).to(self.device)
+        mask = torch.ones([1,1,100,100]).to(self.x.device)
         for index in band_indexs:
             mask*=(self.x[0:1,index:(index+1)]>-9)
         return (mask).bool().to('cpu').numpy()
